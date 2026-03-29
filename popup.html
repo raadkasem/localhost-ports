@@ -2,16 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <div class="container">
-    <!-- Decorative background grain -->
-    <div class="bg-grain"></div>
-
     <!-- Header -->
     <header class="header">
       <div class="header-icon">
@@ -31,6 +25,15 @@
     <div id="scan-status" class="scan-status">
       <div class="scan-spinner"></div>
       <span>Scanning ports<span class="scan-dots">...</span></span>
+    </div>
+
+    <!-- Detected ports banner -->
+    <div id="detected-section" class="detected-section hidden">
+      <div class="detected-header">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span>New ports detected</span>
+      </div>
+      <div id="detected-list" class="detected-list"></div>
     </div>
 
     <!-- Port list -->
