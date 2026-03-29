@@ -21,6 +21,14 @@ Chrome extension that scans your localhost ports and shows all running services 
   <img src="screenshot.png" alt="Localhost Ports Dashboard" width="350">
 </p>
 
+### Auto-discovers new ports
+
+When you visit any localhost URL on an unknown port, the extension detects it and prompts you to add it.
+
+<p align="center">
+  <img src="screenshot-add-custom-port.png" alt="Auto-detect new ports" width="350">
+</p>
+
 ## Install
 
 1. Clone or download this repo
