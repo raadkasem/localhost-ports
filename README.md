@@ -1,16 +1,19 @@
 # Localhost Ports Dashboard
 
-![Visitors](https://komarev.com/ghpvc/?username=raadkasem&repo=localhost-dashboard&color=blueviolet&style=flat-square)
+![Visitors](https://komarev.com/ghpvc/?username=raadkasem&repo=localhost-ports&color=blueviolet&style=flat-square)
 
 Chrome extension that scans your localhost ports and shows all running services — open any of them with one click.
 
 ## Features
 
-- Auto-scans 17 common dev ports (React, Vite, Angular, Django, MySQL, Redis, etc.)
-- Green dot indicator for active services
+- Auto-scans 13 common dev ports (React, Vite, Angular, Django, etc.)
+- Probes both `127.0.0.1` and `localhost` — uses whichever responds
+- Auto-detects service name from page title
+- Auto-discovers new ports when you visit any localhost URL in the browser
+- Badge notification for newly detected ports with Add/Dismiss options
 - One-click open in new tab
 - Add and persist custom ports
-- Labels auto-detected by port number
+- Elegant light theme UI
 
 ## Screenshot
 
