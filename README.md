@@ -2,18 +2,30 @@
 
 ![Visitors](https://komarev.com/ghpvc/?username=raadkasem&repo=localhost-ports&color=blueviolet&style=flat-square)
 
-Chrome extension that scans your localhost ports and shows all running services — open any of them with one click.
+Chrome extension that checks selected local HTTP(S) ports and opens reachable services with one click.
+
+**Current version: 1.2.0** · [Changelog](CHANGELOG.md)
+
+## What's new in 1.2.0
+
+- **Online-only dashboard:** offline and pending ports no longer clutter the service list. Saved ports are still checked on refresh or reopening.
+- **Better local detection:** HTTPS, remembered origins, IPv6 discovery, and non-2xx HTTP responses are supported.
+- **Safer, faster scans:** plain-text titles, bounded requests, persistent discovery decisions, and regression coverage.
 
 ## Features
 
-- Auto-scans 13 common dev ports (React, Vite, Angular, Django, etc.)
-- Probes both `127.0.0.1` and `localhost` — uses whichever responds
-- Auto-detects service name from page title
-- Auto-discovers new ports when you visit any localhost URL in the browser
-- Badge notification for newly detected ports with Add/Dismiss options
-- One-click open in new tab
-- Add and persist custom ports
-- Elegant light theme UI
+- Checks 13 common development ports, plus any custom ports you save
+- Probes `127.0.0.1` and `localhost` over HTTP and HTTPS; prefers a remembered local origin
+- Discovers HTTP(S) origins on `localhost`, `127.0.0.1`, `0.0.0.0`, and IPv6 `[::1]`, including implicit ports 80/443
+- Detects local tabs on navigation, installation/startup, and popup refresh
+- Shows page titles as plain text and recognizes authentication errors, redirects, and other HTTP responses as reachable
+- Shows only confirmed online services; saved offline ports stay hidden and are checked again on refresh or reopening
+- Shows new-port badges and live Add/Dismiss suggestions; dismissals persist until you manually save the port
+- Offers manual refresh, keyboard-accessible links, labeled controls, and reduced-motion support
+- Uses bounded, cancellable scans: four ports at once, at most eight requests, one-second request/body deadlines, and 64 KiB title reads
+- Retains the lightweight light theme, with no runtime dependencies
+
+Default ports: `3000`, `3001`, `4000`, `4200`, `5000`, `5173`, `5500`, `8000`, `8080`, `8443`, `8888`, `9000`, `9090`.
 
 ## Screenshot
 
@@ -23,7 +35,7 @@ Chrome extension that scans your localhost ports and shows all running services 
 
 ### Auto-discovers new ports
 
-When you visit any localhost URL on an unknown port, the extension detects it and prompts you to add it.
+When you visit a supported local HTTP(S) origin on an unknown port, the extension suggests saving it. A suggestion records a visited origin, not a successful health check. Removing a custom port also suppresses repeat suggestions; entering it manually adds it back.
 
 <p align="center">
   <img src="screenshot-add-custom-port.png" alt="Auto-detect new ports" width="350">
@@ -35,6 +47,37 @@ When you visit any localhost URL on an unknown port, the extension detects it an
 2. Open `chrome://extensions`
 3. Enable **Developer mode**
 4. Click **Load unpacked** and select the project folder
+
+After updating the files, click the extension's **Reload** button in `chrome://extensions`. Chrome may request approval for the added HTTPS/IPv6 host access.
+
+If you cloned the repo, run `git pull --ff-only` before reloading. The extension card should then show **1.2.0**. Existing custom ports are preserved; offline ones simply stay hidden until they respond.
+
+## Scope and privacy
+
+- This is not a full port or TCP scanner. It checks the default and saved ports only while the popup is open; background discovery observes local tab navigation without polling servers.
+- “Active” means an HTTP response was received, not that the application is healthy. Ports without a confirmed response stay hidden, including saved ports and those still being checked. Slow servers, browser-blocked ports, denied host access, and untrusted HTTPS certificates can prevent detection. Trust development certificates in Chrome first; the extension never bypasses certificate validation.
+- Automatic host probing uses `127.0.0.1` and `localhost`. Visiting a service on `[::1]` or `0.0.0.0` remembers that origin for later checks. Custom hostnames, nonlocal addresses, WebSocket-only services, and other protocols are outside its scope.
+- Scans use unauthenticated, uncached `GET /` requests. They do not follow redirects or send credentials; title reads stop at 64 KiB and remaining bodies are canceled. Roots requiring cookies may show an authentication status instead of a title; titles beyond the first 64 KiB are not read.
+- Settings and discovered origins stay in `chrome.storage.local`; URL paths, queries, fragments, and page titles are not persisted. There is no extension telemetry or external API. Only `storage` and explicit local host permissions are requested—not broad tab-metadata (`tabs`) access.
+
+## Development and verification
+
+Requires Node.js 22 or later. No package installation is needed.
+
+```sh
+npm run check
+npm test
+```
+
+Optional real-browser integration tests require an installed **Chrome for Testing** or **Chromium** executable (with unpacked-extension command-line support) and `openssl` on your path:
+
+```sh
+CHROME_PATH="/path/to/chrome" npm run test:browser
+```
+
+The runner uses a separate disposable profile and local HTTP/HTTPS/IPv6 fixtures, never your personal profile. That test browser ignores certificate errors to exercise its self-signed HTTPS fixture; production code does not bypass TLS validation. An optional `BROWSER_SCREENSHOT=/absolute/path/popup.png` captures the 400-pixel popup during the test. Browser tests cover real extension permissions, safe rendering, response handling, live discovery, persistence, validation, and online-only visibility as servers start and stop.
+
+See [AUDIT.md](AUDIT.md) for the original findings, fixes, and verification details.
 
 ## License
 

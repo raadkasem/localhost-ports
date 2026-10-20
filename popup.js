@@ -1,274 +1,279 @@
-const DEFAULT_PORTS = [
-  3000, 3001, 4000, 4200, 5000, 5173, 5500,
-  8000, 8080, 8443, 8888, 9000, 9090,
-];
-
-const HOSTS = ["127.0.0.1", "localhost"];
-
-document.addEventListener("DOMContentLoaded", async () => {
+document.addEventListener("DOMContentLoaded", () => {
   const scanStatus = document.getElementById("scan-status");
   const portList = document.getElementById("port-list");
-  const customPortInput = document.getElementById("custom-port");
-  const addBtn = document.getElementById("add-btn");
+  const input = document.getElementById("custom-port");
+  const addButton = document.getElementById("add-btn");
+  const refreshButton = document.getElementById("refresh-btn");
+  const message = document.getElementById("feedback");
+  const detectedSection = document.getElementById("detected-section");
+  const detectedList = document.getElementById("detected-list");
+  const activeCount = document.getElementById("active-count");
+  let state = LocalPorts.normalizeState();
+  const results = new Map();
+  let scanController;
+  let renderFrame;
+  let editing = false;
+  let initialized = false;
+  let refreshing = false;
 
-  // External links
-  document.querySelectorAll("a[target='_blank']").forEach((link) => {
-    link.addEventListener("click", (e) => {
-      e.preventDefault();
-      chrome.tabs.create({ url: link.href });
-    });
-  });
-
-  const stored = await chrome.storage.local.get(["customPorts", "detectedPorts"]);
-  const customPorts = stored.customPorts || [];
-  const detectedPorts = stored.detectedPorts || [];
-
-  const allPorts = [
-    ...DEFAULT_PORTS.map((p) => ({ port: p, custom: false })),
-    ...customPorts.map((p) => ({ port: p, custom: true })),
-  ];
-
-  // Scan all ports concurrently — single fetch per port per host
-  const results = await Promise.all(allPorts.map((entry) => probePort(entry)));
-  const active = results.filter((r) => r.alive);
-
-  scanStatus.classList.add("hidden");
-
-  const activeCountEl = document.getElementById("active-count");
-  if (active.length > 0) {
-    activeCountEl.textContent = `${active.length} active`;
-    activeCountEl.classList.add("visible");
+  function feedback(text = "", invalid = false) {
+    message.textContent = text;
+    input.setAttribute("aria-invalid", String(invalid));
   }
 
-  if (active.length === 0) {
-    portList.innerHTML = `
-      <div class="empty-state">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
-        </svg>
-        <div>No active services found.<br>Start a local server or add a custom port.</div>
-      </div>`;
-  } else {
-    renderPorts(active);
+  function element(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
   }
 
-  // Show detected ports
-  renderDetected();
+  function button(className, text, label, port) {
+    const node = element("button", className, text);
+    node.type = "button";
+    node.title = label;
+    node.setAttribute("aria-label", label);
+    node.dataset.port = port;
+    node.dataset.focusKey = `${className}-${port}`;
+    node.disabled = editing;
+    return node;
+  }
 
-  addBtn.addEventListener("click", () => addCustomPort());
-  customPortInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") addCustomPort();
-  });
-
-  async function addCustomPort() {
-    const val = parseInt(customPortInput.value, 10);
-    if (!val || val < 1 || val > 65535) return;
-    if (allPorts.some((p) => p.port === val)) {
-      customPortInput.value = "";
-      return;
+  function replaceContents(container, fragment) {
+    const active = document.activeElement;
+    const key = container.contains(active) ? active.dataset.focusKey : null;
+    container.replaceChildren(fragment);
+    if (key) {
+      const replacement = [...container.querySelectorAll("[data-focus-key]")]
+        .find((node) => node.dataset.focusKey === key);
+      (replacement || input).focus({ preventScroll: true });
     }
+  }
 
-    customPorts.push(val);
-    await chrome.storage.local.set({ customPorts });
+  function entries() {
+    const customPorts = new Set(state.customPorts);
+    return [...LocalPorts.DEFAULT_PORTS, ...state.customPorts].sort((a, b) => a - b)
+      .map((port) => ({ port, custom: customPorts.has(port), url: state.portEndpoints[port] }));
+  }
 
-    const entry = { port: val, custom: true };
-    const result = await probePort(entry);
-    active.push(result);
-    renderPorts(active);
-
-    activeCountEl.textContent = `${active.length} active`;
-    activeCountEl.classList.add("visible");
-
-    customPortInput.value = "";
+  function renderPorts() {
+    const fragment = document.createDocumentFragment();
+    const online = entries().filter(({ port }) => results.get(port)?.alive);
+    activeCount.textContent = `${online.length} active`;
+    activeCount.classList.toggle("visible", online.length > 0);
+    for (const entry of online) {
+      const result = results.get(entry.port);
+      const url = result.url;
+      const card = element("div", "port-card");
+      const link = element("a", "port-link");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.dataset.focusKey = `port-link-${entry.port}`;
+      link.setAttribute("aria-label", `Open ${url}`);
+      const dot = element("span", "port-dot active");
+      dot.setAttribute("aria-hidden", "true");
+      const info = element("span", "port-info");
+      info.append(element("span", "port-number", `:${entry.port}`), element("span", "port-url", url));
+      link.append(dot, info);
+      let label = result.label;
+      if (result.redirect) label = "Redirect";
+      else if (!result.ok) label = `HTTP ${result.status}`;
+      const labelNode = element("span", "port-label", label);
+      labelNode.title = `${result.label} · ${result.redirect ? "Redirect" : `HTTP ${result.status}`}`;
+      link.append(labelNode);
+      card.append(link);
+      if (entry.custom) card.append(button("port-remove", "×", `Remove port ${entry.port}`, entry.port));
+      const open = element("a", "port-open", "↗");
+      open.href = url;
+      open.target = "_blank";
+      open.rel = "noopener noreferrer";
+      open.dataset.focusKey = `port-open-${entry.port}`;
+      open.title = `Open port ${entry.port}`;
+      open.setAttribute("aria-label", open.title);
+      card.append(open);
+      fragment.append(card);
+    }
+    if (!fragment.childNodes.length) {
+      fragment.append(element("div", "empty-state", scanController && !scanController.signal.aborted
+        ? "Looking for local HTTP(S) services…"
+        : "No active services found. Start a local server or add a custom port."));
+    }
+    replaceContents(portList, fragment);
   }
 
   function renderDetected() {
-    const detectedSection = document.getElementById("detected-section");
-    const detectedList = document.getElementById("detected-list");
-
-    if (detectedPorts.length === 0) {
-      detectedSection.classList.add("hidden");
-      return;
+    detectedSection.classList.toggle("hidden", !state.detectedPorts.length);
+    const fragment = document.createDocumentFragment();
+    for (const port of state.detectedPorts) {
+      const row = element("div", "detected-row");
+      row.append(element("span", "detected-port", `:${port}`));
+      const actions = element("div", "detected-actions");
+      actions.append(
+        button("detected-add", "✓ Add", `Save port ${port}`, port),
+        button("detected-dismiss", "×", `Dismiss port ${port}`, port)
+      );
+      row.append(actions);
+      fragment.append(row);
     }
+    replaceContents(detectedList, fragment);
+  }
 
-    detectedSection.classList.remove("hidden");
-    detectedList.innerHTML = detectedPorts
-      .map((port) => `
-        <div class="detected-row">
-          <span class="detected-port">:${port}</span>
-          <div class="detected-actions">
-            <button class="detected-add" data-port="${port}" title="Add to list">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-              Add
-            </button>
-            <button class="detected-dismiss" data-port="${port}" title="Dismiss">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-          </div>
-        </div>`)
-      .join("");
-
-    // Add button — move to custom ports and re-scan
-    detectedList.querySelectorAll(".detected-add").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const port = parseInt(btn.dataset.port, 10);
-
-        // Move from detected to custom
-        const idx = detectedPorts.indexOf(port);
-        if (idx > -1) detectedPorts.splice(idx, 1);
-        customPorts.push(port);
-        await chrome.storage.local.set({ customPorts, detectedPorts });
-        updateExtBadge(detectedPorts.length);
-
-        // Probe and add to active list
-        const result = await probePort({ port, custom: true });
-        active.push(result);
-        renderPorts(active);
-        activeCountEl.textContent = `${active.length} active`;
-        activeCountEl.classList.add("visible");
-        renderDetected();
-      });
-    });
-
-    // Dismiss button — remove from detected
-    detectedList.querySelectorAll(".detected-dismiss").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const port = parseInt(btn.dataset.port, 10);
-        const idx = detectedPorts.indexOf(port);
-        if (idx > -1) detectedPorts.splice(idx, 1);
-        await chrome.storage.local.set({ detectedPorts });
-        updateExtBadge(detectedPorts.length);
-        renderDetected();
-      });
+  function scheduleRender() {
+    if (renderFrame) return;
+    renderFrame = requestAnimationFrame(() => {
+      renderFrame = undefined;
+      renderPorts();
     });
   }
 
-  function updateExtBadge(count) {
-    if (count > 0) {
-      chrome.action.setBadgeText({ text: String(count) });
+  async function startScan(fresh = false) {
+    scanController?.abort();
+    const controller = new AbortController();
+    scanController = controller;
+    if (fresh) results.clear();
+    const pending = entries().filter(({ port }) => !results.has(port));
+    scanStatus.classList.toggle("hidden", !pending.length);
+    portList.setAttribute("aria-busy", String(pending.length > 0));
+    renderPorts();
+    try {
+      await PortScanner.scan(pending, {
+        signal: controller.signal,
+        onResult(result) {
+          if (controller !== scanController) return;
+          results.set(result.port, result);
+          scheduleRender();
+        },
+      });
+    } catch {
+      if (!controller.signal.aborted) feedback("Scanning failed. Use Refresh to try again.");
+    } finally {
+      if (controller === scanController) {
+        scanController = undefined;
+        if (renderFrame) cancelAnimationFrame(renderFrame);
+        renderFrame = undefined;
+        scanStatus.classList.add("hidden");
+        portList.setAttribute("aria-busy", "false");
+        renderPorts();
+      }
+    }
+  }
+
+  function applyState(stored, rescan = true) {
+    const previous = JSON.stringify(entries());
+    const oldEndpoints = state.portEndpoints;
+    state = LocalPorts.normalizeState(stored);
+    const configured = entries();
+    const configuredPorts = new Set(configured.map((entry) => entry.port));
+    for (const port of results.keys()) {
+      if (!configuredPorts.has(port) || oldEndpoints[port] !== state.portEndpoints[port]) {
+        results.delete(port);
+      }
+    }
+    renderDetected();
+    if (rescan && (!initialized || previous !== JSON.stringify(configured))) {
+      initialized = true;
+      void startScan();
     } else {
-      chrome.action.setBadgeText({ text: "" });
+      renderPorts();
     }
   }
 
-  function renderPorts(ports) {
-    portList.innerHTML = ports
-      .map((p) => {
-        const dotClass = p.alive ? "active" : "custom";
-        return `
-          <div class="port-card" data-url="${p.url}">
-            <div class="port-dot ${dotClass}"></div>
-            <div class="port-info">
-              <div class="port-number">:${p.port}</div>
-              <div class="port-url">${p.url}</div>
-            </div>
-            <span class="port-label">${p.label}</span>
-            ${p.custom ? `<button class="port-remove" data-port="${p.port}" title="Remove">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>` : ""}
-            <button class="port-open" data-url="${p.url}" title="Open">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-            </button>
-          </div>`;
-      })
-      .join("");
-
-    portList.querySelectorAll(".port-card").forEach((card) => {
-      card.addEventListener("click", (e) => {
-        if (e.target.closest(".port-remove") || e.target.closest(".port-open")) return;
-        chrome.tabs.create({ url: card.dataset.url });
-      });
-    });
-
-    portList.querySelectorAll(".port-open").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        chrome.tabs.create({ url: btn.dataset.url });
-      });
-    });
-
-    portList.querySelectorAll(".port-remove").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const port = parseInt(btn.dataset.port, 10);
-        const idx = customPorts.indexOf(port);
-        if (idx > -1) customPorts.splice(idx, 1);
-        await chrome.storage.local.set({ customPorts });
-
-        const activeIdx = active.findIndex((p) => p.port === port);
-        if (activeIdx > -1) active.splice(activeIdx, 1);
-
-        if (active.length === 0) {
-          portList.innerHTML = `<div class="empty-state">No active services found.</div>`;
-          activeCountEl.classList.remove("visible");
-        } else {
-          renderPorts(active);
-          activeCountEl.textContent = `${active.length} active`;
-        }
-      });
-    });
+  async function command(action, port) {
+    const response = await chrome.runtime.sendMessage({ type: "local-ports", action, port });
+    if (!response?.ok) throw new Error(response?.error || "The extension could not respond. Reload it and try again.");
+    return response.state;
   }
+
+  async function edit(action, port) {
+    if (editing) return;
+    const focusKey = document.activeElement.dataset.focusKey;
+    editing = true;
+    addButton.disabled = true;
+    renderDetected();
+    renderPorts();
+    feedback();
+    try {
+      applyState(await command(action, port));
+      if (action === "add") {
+        input.value = "";
+        input.focus();
+      }
+    } catch (error) {
+      feedback(error.message || "Could not save ports. Please try again.");
+    } finally {
+      editing = false;
+      addButton.disabled = false;
+      renderDetected();
+      renderPorts();
+      if (focusKey && document.activeElement === document.body) {
+        const replacement = [...document.querySelectorAll("[data-focus-key]")]
+          .find((node) => node.dataset.focusKey === focusKey);
+        (replacement || input).focus({ preventScroll: true });
+      }
+    }
+  }
+
+  async function refresh() {
+    if (refreshing) return;
+    refreshing = true;
+    refreshButton.disabled = true;
+    feedback();
+    try {
+      applyState(await command("getState"), false);
+      initialized = true;
+      await startScan(true);
+    } catch (error) {
+      scanStatus.classList.add("hidden");
+      feedback(error.message || "Could not load ports. Use Refresh to try again.");
+    } finally {
+      refreshing = false;
+      refreshButton.disabled = false;
+    }
+  }
+
+  // Bind controls before any storage read or network request.
+  document.getElementById("add-port-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const port = LocalPorts.parsePort(input.value);
+    if (port === null) {
+      feedback("Enter a whole port number from 1 to 65535.", true);
+      input.focus();
+    } else if (entries().some((entry) => entry.port === port)) {
+      feedback(`Port ${port} is already in the scan list.`);
+    } else {
+      void edit("add", port);
+    }
+  });
+  input.addEventListener("input", () => feedback());
+  refreshButton.addEventListener("click", () => void refresh());
+  detectedList.addEventListener("click", (event) => {
+    const target = event.target.closest("button[data-port]");
+    if (target) void edit(target.classList.contains("detected-add") ? "add" : "dismiss", Number(target.dataset.port));
+  });
+  portList.addEventListener("click", (event) => {
+    const target = event.target.closest(".port-remove");
+    if (target) void edit("remove", Number(target.dataset.port));
+  });
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest("a[target='_blank']");
+    if (!link || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    chrome.tabs.create({ url: link.href }).catch(() => feedback("Could not open the tab. Please try again."));
+  });
+  function onStorageChanged(changes, area) {
+    if (area !== "local" || !LocalPorts.STORAGE_KEYS.some((key) => key in changes)) return;
+    const next = { ...state };
+    for (const key of LocalPorts.STORAGE_KEYS) {
+      if (key in changes) next[key] = changes[key].newValue;
+    }
+    applyState(next);
+  }
+  chrome.storage.onChanged.addListener(onStorageChanged);
+  window.addEventListener("pagehide", () => {
+    scanController?.abort();
+    if (renderFrame) cancelAnimationFrame(renderFrame);
+    chrome.storage.onChanged.removeListener(onStorageChanged);
+  }, { once: true });
+  void refresh();
 });
-
-/**
- * Probe a port — fetches both 127.0.0.1 and localhost in parallel.
- * Prefers 2xx responses over error codes (e.g. 403).
- * If both succeed, prefers 127.0.0.1.
- */
-async function probePort(entry) {
-  const results = await Promise.allSettled(
-    HOSTS.map(async (host) => {
-      const url = `http://${host}:${entry.port}`;
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 800);
-
-      try {
-        const res = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeout);
-        return { url, res, ok: res.ok };
-      } catch (err) {
-        clearTimeout(timeout);
-        throw err;
-      }
-    })
-  );
-
-  const fulfilled = results
-    .filter((r) => r.status === "fulfilled")
-    .map((r) => r.value);
-
-  if (fulfilled.length === 0) {
-    return { ...entry, alive: false, label: `Port ${entry.port}`, url: "" };
-  }
-
-  // Prefer a 2xx response, fall back to any response
-  const pick = fulfilled.find((r) => r.ok) || fulfilled[0];
-
-  // Only show as alive if we got a 2xx
-  if (!pick.ok) {
-    return { ...entry, alive: false, label: `Port ${entry.port}`, url: "" };
-  }
-
-  const label = await extractLabel(pick.res, entry.port);
-  return { ...entry, alive: true, label, url: pick.url };
-}
-
-/**
- * Extract label from the already-fetched response (no extra request).
- */
-async function extractLabel(res, port) {
-  try {
-    const contentType = res.headers.get("content-type") || "";
-    const server = res.headers.get("server") || "";
-
-    if (contentType.includes("text/html")) {
-      const text = await res.text();
-      const match = text.match(/<title[^>]*>([^<]+)<\/title>/i);
-      if (match && match[1].trim()) {
-        return match[1].trim().substring(0, 25);
-      }
-    }
-
-    if (server) return server.substring(0, 25);
-  } catch {}
-
-  return `Port ${port}`;
-}
