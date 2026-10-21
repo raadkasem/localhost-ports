@@ -90,11 +90,27 @@ async function main() {
     execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
       "-subj", "/CN=localhost", "-keyout", path.join(temporary, "key.pem"), "-out", path.join(temporary, "cert.pem")], { stdio: "ignore" });
     const title = '<img src=x onerror="globalThis.injected=true"> & Café';
-    const htmlPort = await serve((request, response) => {
+    let holdHTML = false;
+    let htmlRequests = 0;
+    const heldResponses = [];
+    function sendHTML(response) {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       response.end(`<title>${title.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</title>`);
+    }
+    function releaseHTML() {
+      holdHTML = false;
+      for (const response of heldResponses.splice(0)) sendHTML(response);
+    }
+    const htmlPort = await serve((request, response) => {
+      htmlRequests++;
+      if (holdHTML) heldResponses.push(response);
+      else sendHTML(response);
     });
     const authPort = await serve((request, response) => { response.writeHead(401); response.end("Sign in"); });
+    const forbiddenPort = await serve((request, response) => { response.writeHead(403); response.end(); });
+    const airplayPort = await serve((request, response) => {
+      response.writeHead(403, { server: "AirTunes/980.77.5", "X-Apple-ProcessingTime": "0" }); response.end();
+    });
     let remoteRedirectRequests = 0;
     const destinationPort = await serve((request, response) => {
       remoteRedirectRequests++;
@@ -113,7 +129,7 @@ async function main() {
     const offlinePort = await serve((request, response) => response.end());
     const offlineServer = servers.at(-1);
     await new Promise((resolve) => offlineServer.close(resolve));
-    const customPorts = [htmlPort, authPort, redirectPort, stalledPort, tlsPort, ipv6Port, offlinePort];
+    const customPorts = [htmlPort, authPort, forbiddenPort, airplayPort, redirectPort, stalledPort, tlsPort, ipv6Port, offlinePort];
 
     browser = spawn(executable, [
       "--headless=new", "--no-first-run", "--no-default-browser-check",
@@ -166,7 +182,7 @@ async function main() {
     }, session);
     await cdp.call("Page.navigate", { url: `${origin}/popup.html` }, session);
     const evaluate = (expression) => cdp.evaluate(session, expression);
-    await until(() => evaluate("document.querySelector('#scan-status')?.classList.contains('hidden') && document.querySelector('#refresh-btn')?.disabled === false"), "initial scan");
+    await until(() => evaluate("document.querySelector('#port-list')?.getAttribute('aria-busy') === 'false' && document.querySelector('#refresh-btn')?.disabled === false"), "initial scan");
     const snapshot = await evaluate(`({
       errors: testErrors,
       count: document.querySelector('#active-count').textContent,
@@ -189,6 +205,8 @@ async function main() {
     const row = (port) => snapshot.rows.find((row) => row.port === port);
     assert.equal(row(htmlPort).label, title);
     assert.equal(row(authPort).label, "HTTP 401");
+    assert.equal(row(forbiddenPort).label, "HTTP 403");
+    assert.equal(row(airplayPort), undefined);
     assert.equal(row(redirectPort).label, "Redirect");
     assert.equal(remoteRedirectRequests, 0);
     assert.equal(row(stalledPort).label, "Streaming API");
@@ -205,12 +223,31 @@ async function main() {
       features: [{ name: "prefers-reduced-motion", value: "reduce" }],
     }, session);
     assert.equal(await evaluate("getComputedStyle(document.querySelector('.port-dot.active'), '::after').animationName"), "none");
+    holdHTML = true;
+    const requestsBeforeRefresh = htmlRequests;
     await evaluate(`document.querySelector('a[data-focus-key="port-link-${htmlPort}"]').focus();
       document.querySelector('#refresh-btn').click();`);
+    await until(() => htmlRequests > requestsBeforeRefresh, "refresh revalidation request");
+    assert.equal(await evaluate(`Boolean(document.querySelector('a[data-focus-key="port-link-${htmlPort}"]'))`), true);
+    assert.equal(await evaluate("document.querySelector('#scan-status').classList.contains('hidden')"), true);
+    assert.equal(await evaluate("document.activeElement.dataset.focusKey"), `port-link-${htmlPort}`);
+    releaseHTML();
     await until(() => evaluate("!document.querySelector('#refresh-btn').disabled"), "keyboard focus after refresh");
-    // Clearing unconfirmed results may move focus to the input until this port is online again.
-    assert.equal(await evaluate("document.activeElement.id"), "custom-port");
-    console.log("PASS real extension loading, host permissions, HTTP/HTTPS/IPv6, auth, redirects, stalled bodies, injection safety, counts and layout");
+    assert.equal(await evaluate("document.activeElement.dataset.focusKey"), `port-link-${htmlPort}`);
+    console.log("PASS real extension loading, HTTP/HTTPS/IPv6, AirPlay exclusion, legitimate 403s, injection safety, stable refresh, counts and layout");
+
+    await until(() => evaluate(`chrome.storage.session.get(PortScanCache.KEY).then(data =>
+      data[PortScanCache.KEY]?.results.some(result => result.port === ${htmlPort} && result.alive))`), "session snapshot");
+    holdHTML = true;
+    const requestsBeforeReload = htmlRequests;
+    await cdp.call("Page.reload", {}, session);
+    await until(() => htmlRequests > requestsBeforeReload, "reopened popup revalidation request");
+    assert.equal(await evaluate(`Boolean(document.querySelector('a[data-focus-key="port-link-${htmlPort}"]'))`), true);
+    assert.equal(await evaluate("document.querySelector('#scan-status').classList.contains('hidden')"), true);
+    assert.equal(await evaluate("document.querySelector('#port-list').getAttribute('aria-busy')"), "true");
+    releaseHTML();
+    await until(() => evaluate("!document.querySelector('#refresh-btn').disabled"), "quiet reopen revalidation");
+    console.log("PASS recent results survive reopening while fresh checks run without a flashing scan banner");
 
     for (const value of ["1e3", "1.5", "0", "65536", ""]) {
       const error = await evaluate(`document.querySelector('#custom-port').value=${JSON.stringify(value)};
@@ -246,7 +283,7 @@ async function main() {
     await until(() => evaluate("!document.querySelector('#refresh-btn').disabled"), "refresh");
     assert.equal(await evaluate(`Boolean(document.querySelector('.detected-add[data-port="${livePort}"]'))`), false);
     await cdp.call("Page.reload", {}, session);
-    await until(() => evaluate("document.querySelector('#scan-status')?.classList.contains('hidden') && document.querySelector('#refresh-btn')?.disabled === false"), "popup reload");
+    await until(() => evaluate("document.querySelector('#port-list')?.getAttribute('aria-busy') === 'false' && document.querySelector('#refresh-btn')?.disabled === false"), "popup reload");
     assert.equal(await evaluate(`document.querySelectorAll('.port-remove[data-port="${offlinePort}"]').length`), 0);
     assert.equal(await evaluate(`chrome.storage.local.get('customPorts').then(state => state.customPorts.includes(${offlinePort}))`), true);
     assert.equal(await evaluate(`Boolean(document.querySelector('.detected-add[data-port="${livePort}"]'))`), false);

@@ -2,6 +2,24 @@
 
 Notable changes to Localhost Ports Dashboard are documented here.
 
+## 1.2.1 - 2026-10-21
+
+### Fixed
+
+- Repeated popup scan flashes: restore validated results checked within the last minute from session memory, then recheck quietly. Refresh no longer clears existing cards before new checks finish.
+- Apple AirPlay Receiver appearing as a development app on port 5000 with an empty HTTP 403 response. Exclude responses identified as AirPlay/AirTunes, not all 403 responses or every service on port 5000.
+
+### Added
+
+- Eight regression tests for cache expiry/validation and distinguishing AirPlay from genuine HTTP 403 applications, bringing the automated suite to 29 tests.
+- Real-browser coverage for quiet cached reopening, fresh background checks, and stable refresh/focus.
+
+### Upgrade notes
+
+- Update the files and reload the extension in `chrome://extensions`; confirm version **1.2.1**.
+- No new permissions. Saved ports are preserved, and the session cache is cleared by reloading.
+- The first open or an expired cache still requires a scan. Results checked within the last minute can appear immediately on reopening, then update as fresh checks finish.
+
 ## 1.2.0 - 2026-10-20
 
 ### Added

@@ -12,6 +12,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const results = new Map();
   let scanController;
   let renderFrame;
+  let cacheTimer;
   let editing = false;
   let initialized = false;
   let refreshing = false;
@@ -95,7 +96,7 @@ document.addEventListener("DOMContentLoaded", () => {
       fragment.append(card);
     }
     if (!fragment.childNodes.length) {
-      fragment.append(element("div", "empty-state", scanController && !scanController.signal.aborted
+      fragment.append(element("div", "empty-state", !initialized || (scanController && !scanController.signal.aborted)
         ? "Looking for local HTTP(S) services…"
         : "No active services found. Start a local server or add a custom port."));
     }
@@ -127,13 +128,36 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  async function startScan(fresh = false) {
+  function saveCache() {
+    clearTimeout(cacheTimer);
+    cacheTimer = undefined;
+    // Session storage is optional and disposable; cache failures must not block scans.
+    try {
+      chrome.storage.session?.set({ [PortScanCache.KEY]: PortScanCache.snapshot(results) }).catch(() => {});
+    } catch {
+      // Closing/reloading the extension can invalidate this popup's API context.
+    }
+  }
+
+  async function readCache() {
+    try {
+      return await chrome.storage.session?.get(PortScanCache.KEY);
+    } catch {
+      return {};
+    }
+  }
+
+  function scheduleCache() {
+    if (!cacheTimer) cacheTimer = setTimeout(saveCache, 150);
+  }
+
+  async function startScan(recheck = false, quiet = results.size > 0) {
     scanController?.abort();
     const controller = new AbortController();
     scanController = controller;
-    if (fresh) results.clear();
-    const pending = entries().filter(({ port }) => !results.has(port));
-    scanStatus.classList.toggle("hidden", !pending.length);
+    // Keep last-checked cards in place until each new result confirms or removes it.
+    const pending = entries().filter(({ port }) => recheck || !results.has(port));
+    scanStatus.classList.toggle("hidden", quiet || !pending.length);
     portList.setAttribute("aria-busy", String(pending.length > 0));
     renderPorts();
     try {
@@ -141,8 +165,11 @@ document.addEventListener("DOMContentLoaded", () => {
         signal: controller.signal,
         onResult(result) {
           if (controller !== scanController) return;
-          results.set(result.port, result);
+          results.set(result.port, {
+            ...result, checkedAt: Date.now(), preferredOrigin: state.portEndpoints[result.port] || null,
+          });
           scheduleRender();
+          scheduleCache();
         },
       });
     } catch {
@@ -155,6 +182,7 @@ document.addEventListener("DOMContentLoaded", () => {
         scanStatus.classList.add("hidden");
         portList.setAttribute("aria-busy", "false");
         renderPorts();
+        saveCache();
       }
     }
   }
@@ -171,9 +199,9 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
     renderDetected();
-    if (rescan && (!initialized || previous !== JSON.stringify(configured))) {
-      initialized = true;
-      void startScan();
+    if (rescan && initialized && previous !== JSON.stringify(configured)) {
+      // A configuration edit must not abandon the rest of an in-progress recheck.
+      void startScan(Boolean(scanController));
     } else {
       renderPorts();
     }
@@ -214,17 +242,31 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  async function refresh() {
+  async function refresh(restore = false) {
     if (refreshing) return;
     refreshing = true;
     refreshButton.disabled = true;
     feedback();
     try {
+      if (restore) {
+        const [stored, cached] = await Promise.all([
+          chrome.storage.local.get(LocalPorts.STORAGE_KEYS),
+          readCache(),
+        ]);
+        applyState(stored, false);
+        for (const [port, result] of PortScanCache.restore(cached?.[PortScanCache.KEY], entries())) {
+          results.set(port, result);
+        }
+        renderPorts();
+      }
       applyState(await command("getState"), false);
       initialized = true;
       await startScan(true);
     } catch (error) {
+      initialized = true;
       scanStatus.classList.add("hidden");
+      portList.setAttribute("aria-busy", "false");
+      renderPorts();
       feedback(error.message || "Could not load ports. Use Refresh to try again.");
     } finally {
       refreshing = false;
@@ -262,7 +304,7 @@ document.addEventListener("DOMContentLoaded", () => {
     chrome.tabs.create({ url: link.href }).catch(() => feedback("Could not open the tab. Please try again."));
   });
   function onStorageChanged(changes, area) {
-    if (area !== "local" || !LocalPorts.STORAGE_KEYS.some((key) => key in changes)) return;
+    if (!initialized || area !== "local" || !LocalPorts.STORAGE_KEYS.some((key) => key in changes)) return;
     const next = { ...state };
     for (const key of LocalPorts.STORAGE_KEYS) {
       if (key in changes) next[key] = changes[key].newValue;
@@ -273,7 +315,8 @@ document.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("pagehide", () => {
     scanController?.abort();
     if (renderFrame) cancelAnimationFrame(renderFrame);
+    if (initialized) saveCache();
     chrome.storage.onChanged.removeListener(onStorageChanged);
   }, { once: true });
-  void refresh();
+  void refresh(true);
 });

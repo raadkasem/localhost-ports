@@ -53,6 +53,9 @@ globalThis.PortScanner = (() => {
         credentials: "omit",
         redirect: "manual",
       });
+      // macOS AirPlay Receiver also listens on development ports (notably 5000).
+      // Identify the service, not its port/status: real apps can legitimately return 403.
+      if (/^(?:AirTunes|AirPlay)(?:\/|\s|$)/i.test((response.headers.get("server") || "").trim())) return null;
       const label = await readLabel(response, port);
       return {
         alive: true, url, label, status: response.status,

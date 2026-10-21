@@ -35,9 +35,23 @@ after the original findings.
 ### Verification
 
 - `npm run check`: production JavaScript syntax checks.
-- `npm test`: 21 automated regressions for input/storage validation, endpoint restrictions, concurrent discoveries/edits, migration, persistent dismissal, API failure recovery, badge updates, HTTP/HTTPS selection, response/body deadlines, cancellation, and the eight-request concurrency ceiling. Also checks manifest permissions and icon dimensions.
+- `npm test`: 29 automated regressions for input/storage validation, endpoint restrictions, concurrent discoveries/edits, migration, persistent dismissal, API failure recovery, badge updates, HTTP/HTTPS selection, response/body deadlines, cancellation, and the eight-request concurrency ceiling. Also checks manifest permissions, icon dimensions, short-lived cache validation/expiry, and AirPlay exclusion without hiding genuine HTTP 403 apps.
 - `npm run test:browser` with Chrome for Testing 156.0.8078.4: loads the real unpacked extension in an isolated profile and exercises HTTP, HTTPS, IPv6, authenticated errors, redirects without following their destination, stalled bodies, hostile escaped titles, counts/layout at 400px, focus handling, reduced motion, strict input handling, hidden offline saves, rapid duplicate submissions, live discovery/badges, refresh, reopen persistence, and visibility as saved services start and stop. No uncaught popup errors or unhandled rejections were observed. The test-only HTTPS fixture uses a self-signed certificate bypass; production never does.
 - `git diff --check`: whitespace validation.
+
+### Popup follow-up (1.2.1)
+
+Recent scan results are validated and retained in session memory for up to one
+minute, allowing quick reopens to show last-checked services while fresh probes
+run quietly. Refresh keeps cards in place until updated instead of clearing the
+list. Expired snapshots, changed origins, removed ports, and unsafe cached URLs
+are rejected. Real-browser tests delay responses to verify the cached UI remains
+visible during reopening and refresh, with keyboard focus preserved.
+
+macOS Control Center's AirPlay Receiver can return an empty HTTP 403 on port
+5000. The scanner now excludes responses identified by an AirTunes/AirPlay
+server header, not arbitrary 403 responses or port 5000 itself. Tests cover both
+system-service exclusion and genuine development apps, including mixed hosts.
 
 ### Remaining platform limits (not unresolved implementation findings)
 

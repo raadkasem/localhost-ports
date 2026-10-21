@@ -23,6 +23,39 @@ test("successful host is preferred over a responding error host", async () => {
   assert.equal(result.url, "http://localhost:3000");
 });
 
+test("AirPlay responses are hidden by identity, including remembered origins, and bodies are canceled", async () => {
+  for (const server of ["AirTunes/980.77.5", "AirPlay/1.0"]) {
+    let canceled = 0;
+    const { PortScanner } = load(["shared.js", "scanner.js"], {
+      fetch: async () => new Response(new ReadableStream({ cancel() { canceled++; } }), {
+        status: 403, headers: { server },
+      }),
+    });
+    assert.equal((await PortScanner.probePort({ port: 5000, url: "http://127.0.0.1:5000" })).alive, false);
+    assert.ok(canceled > 0);
+  }
+});
+
+test("real development apps on port 5000 remain visible even with an empty 403 body", async () => {
+  const { PortScanner } = load(["shared.js", "scanner.js"], {
+    fetch: async () => new Response(null, { status: 403, headers: { server: "Werkzeug/3.1.0" } }),
+  });
+  const result = await PortScanner.probePort({ port: 5000 });
+  assert.equal(result.alive, true);
+  assert.equal(result.status, 403);
+});
+
+test("an AirPlay listener on one host does not hide a real app on the other", async () => {
+  const { PortScanner } = load(["shared.js", "scanner.js"], {
+    fetch: async (url) => url.includes("127.0.0.1")
+      ? new Response(null, { status: 403, headers: { server: "AirTunes/980.77.5" } }) : html("Flask app"),
+  });
+  const result = await PortScanner.probePort({ port: 5000 });
+  assert.equal(result.alive, true);
+  assert.equal(result.label, "Flask app");
+  assert.equal(result.url, "http://localhost:5000");
+});
+
 test("a plaintext HTTP error does not mask a working HTTPS service on the same port", async () => {
   const { PortScanner } = load(["shared.js", "scanner.js"], {
     fetch: async (url) => html("Service", url.startsWith("http:") ? 400 : 200),
