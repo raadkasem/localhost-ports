@@ -120,6 +120,35 @@ async function main() {
     const redirectPort = await serve((request, response) => {
       response.writeHead(302, { location: `http://127.0.0.1:${destinationPort}/` }); response.end();
     });
+    let loginRequests = 0;
+    const redirectCookies = [];
+    const loginPort = await serve((request, response) => {
+      if (request.url === "/") {
+        response.writeHead(302, { location: "/login", "set-cookie": "scanSession=must-not-send; Path=/" });
+        response.end();
+      } else {
+        loginRequests++;
+        redirectCookies.push(request.headers.cookie || "");
+        response.writeHead(200, { "content-type": "text/html" });
+        response.end("<title>Local app &amp; Login</title>");
+      }
+    });
+    const chainPort = await serve((request, response) => {
+      if (request.url === "/auth/login") {
+        response.writeHead(200, { "content-type": "text/html" });
+        response.end("<title>Chained login</title>");
+      } else {
+        response.writeHead(request.url === "/" ? 302 : 307, { location: request.url === "/" ? "/auth/start" : "login" });
+        response.end();
+      }
+    });
+    const escapePort = await serve((request, response) => {
+      response.writeHead(302, { location: request.url === "/" ? "/login" : `http://127.0.0.1:${destinationPort}/` });
+      response.end();
+    });
+    const loopPort = await serve((request, response) => {
+      response.writeHead(302, { location: request.url === "/" ? "/loop" : "/" }); response.end();
+    });
     const stalledPort = await serve((request, response) => {
       response.writeHead(200, { "content-type": "text/html", server: "Streaming API" });
       response.flushHeaders();
@@ -129,7 +158,8 @@ async function main() {
     const offlinePort = await serve((request, response) => response.end());
     const offlineServer = servers.at(-1);
     await new Promise((resolve) => offlineServer.close(resolve));
-    const customPorts = [htmlPort, authPort, forbiddenPort, airplayPort, redirectPort, stalledPort, tlsPort, ipv6Port, offlinePort];
+    const customPorts = [htmlPort, authPort, forbiddenPort, airplayPort, redirectPort, loginPort, chainPort,
+      escapePort, loopPort, stalledPort, tlsPort, ipv6Port, offlinePort];
 
     browser = spawn(executable, [
       "--headless=new", "--no-first-run", "--no-default-browser-check",
@@ -208,6 +238,14 @@ async function main() {
     assert.equal(row(forbiddenPort).label, "HTTP 403");
     assert.equal(row(airplayPort), undefined);
     assert.equal(row(redirectPort).label, "Redirect");
+    assert.equal(row(loginPort).label, "Local app & Login");
+    assert.equal(row(loginPort).url, `http://127.0.0.1:${loginPort}/`);
+    assert.equal(row(chainPort).label, "Chained login");
+    assert.equal(row(escapePort).label, "Redirect");
+    assert.equal(row(loopPort).label, "Redirect");
+    assert.ok(loginRequests > 0);
+    assert.ok(redirectCookies.every((cookie) => cookie === ""));
+    assert.equal(await evaluate("chrome.webRequest.onHeadersReceived.hasListeners()"), false);
     assert.equal(remoteRedirectRequests, 0);
     assert.equal(row(stalledPort).label, "Streaming API");
     assert.ok(row(tlsPort).url.startsWith("https:"));
@@ -235,6 +273,7 @@ async function main() {
     await until(() => evaluate("!document.querySelector('#refresh-btn').disabled"), "keyboard focus after refresh");
     assert.equal(await evaluate("document.activeElement.dataset.focusKey"), `port-link-${htmlPort}`);
     console.log("PASS real extension loading, HTTP/HTTPS/IPv6, AirPlay exclusion, legitimate 403s, injection safety, stable refresh, counts and layout");
+    console.log("PASS same-origin redirect titles/chains, root launch URLs, omitted cookies, redirect loops and blocked cross-origin hops");
 
     await until(() => evaluate(`chrome.storage.session.get(PortScanCache.KEY).then(data =>
       data[PortScanCache.KEY]?.results.some(result => result.port === ${htmlPort} && result.alive))`), "session snapshot");

@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Localhost Ports Dashboard",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Find HTTP(S) services on common and saved localhost ports, then open them with one click.",
   "author": "Raad Kasem",
   "homepage_url": "https://raadkasem.dev",
   "permissions": [
-    "storage"
+    "storage",
+    "webRequest"
   ],
   "host_permissions": [
     "http://localhost/*",

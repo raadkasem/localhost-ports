@@ -41,7 +41,7 @@ test("legacy and corrupt storage is normalized and deduplicated without trusting
 test("manifest uses exact local hosts, no tabs permission, and valid icon sizes", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json")));
   assert.equal(manifest.manifest_version, 3);
-  assert.deepEqual(manifest.permissions, ["storage"]);
+  assert.deepEqual(manifest.permissions, ["storage", "webRequest"]);
   assert.deepEqual(manifest.host_permissions.sort(), plain(LocalPorts.HOST_PATTERNS).sort());
   for (const [size, file] of Object.entries(manifest.icons)) {
     const png = fs.readFileSync(path.join(root, file));

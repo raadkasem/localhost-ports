@@ -93,6 +93,154 @@ test("redirects are reachable without following their destination", async () => 
   assert.equal(result.redirect, true);
 });
 
+test("same-origin redirects expose the destination title but retain the root launch URL", async () => {
+  for (const status of [301, 302, 303, 307, 308]) {
+    const calls = [];
+    const { PortScanner } = load(["shared.js", "scanner.js"], {
+      fetch: async (url, options) => {
+        calls.push(url);
+        assert.equal(options.redirect, "manual");
+        assert.equal(options.credentials, "omit");
+        return calls.length === 1 ? new Response(null, { status, headers: { location: "/login?next=%2F#sign-in" } }) : html("Local app &amp; Login");
+      },
+    });
+    const result = await PortScanner.probePort({ port: 8073, url: "http://0.0.0.0:8073" });
+    assert.deepEqual(calls, ["http://0.0.0.0:8073", "http://0.0.0.0:8073/login?next=%2F"]);
+    assert.equal(result.label, "Local app & Login");
+    assert.equal(result.url, "http://0.0.0.0:8073");
+    assert.equal(result.redirect, false);
+    assert.equal(result.status, 200);
+    assert.equal(result.ok, true);
+  }
+});
+
+test("opaque redirects use extension-only response headers and remove the temporary listener", async () => {
+  const listeners = new Set();
+  const calls = [];
+  const chrome = {
+    runtime: { id: "test-extension" },
+    webRequest: { onHeadersReceived: {
+      addListener(listener, filter, options) {
+        listeners.add(listener);
+        assert.deepEqual([...filter.types], ["xmlhttprequest"]);
+        assert.deepEqual([...options], ["responseHeaders"]);
+        assert.ok(filter.urls.every((url) => !url.includes("<all_urls>")));
+      },
+      removeListener(listener) { listeners.delete(listener); },
+    } },
+  };
+  const { PortScanner } = load(["shared.js", "scanner.js"], {
+    chrome,
+    fetch: async (url) => {
+      calls.push(url);
+      if (calls.length > 1) return html("Login page");
+      for (const listener of listeners) {
+        listener({ initiator: "chrome-extension://test-extension", url: `${url}/`, statusCode: 302,
+          responseHeaders: [{ name: "Location", value: "/login" }] });
+        listener({ initiator: "http://localhost:8073", url: `${url}/`, statusCode: 302,
+          responseHeaders: [{ name: "Location", value: "/not-the-scan" }] });
+      }
+      return { status: 0, ok: false, type: "opaqueredirect", headers: new Headers(), body: null };
+    },
+  });
+  const result = await PortScanner.probePort({ port: 8073, url: "http://localhost:8073" });
+  assert.equal(result.label, "Login page");
+  assert.deepEqual(calls, ["http://localhost:8073", "http://localhost:8073/login"]);
+  assert.equal(listeners.size, 0);
+});
+
+test("redirects to other hosts, ports, schemes, credentials, and malformed URLs are never fetched", async () => {
+  for (const location of [
+    "https://example.com/login", "//example.com/login", "http://127.0.0.1:8073/login",
+    "http://localhost:8074/login", "https://localhost:8073/login", "http://user:pass@localhost:8073/login",
+    "javascript:alert(1)", "data:text/html,<title>External</title>", "http://[",
+  ]) {
+    const calls = [];
+    const { PortScanner } = load(["shared.js", "scanner.js"], {
+      fetch: async (url) => {
+        calls.push(url);
+        return new Response(null, { status: 302, headers: { location } });
+      },
+    });
+    const result = await PortScanner.probePort({ port: 8073, url: "http://localhost:8073" });
+    assert.equal(result.alive, true);
+    assert.equal(result.redirect, true);
+    assert.deepEqual(calls, ["http://localhost:8073"], location);
+  }
+});
+
+test("redirect chains resolve relative paths and cancel every intermediate body", async () => {
+  let canceled = 0;
+  const calls = [];
+  const { PortScanner } = load(["shared.js", "scanner.js"], {
+    fetch: async (url) => {
+      calls.push(url);
+      if (calls.length === 3) return html("Dashboard");
+      return new Response(new ReadableStream({ cancel() { canceled++; } }), {
+        status: 302, headers: { location: calls.length === 1 ? "http://localhost:8073/auth/start" : "../login" },
+      });
+    },
+  });
+  const result = await PortScanner.probePort({ port: 8073, url: "http://localhost:8073" });
+  assert.equal(result.label, "Dashboard");
+  assert.equal(canceled, 2);
+  assert.deepEqual(calls, ["http://localhost:8073", "http://localhost:8073/auth/start", "http://localhost:8073/login"]);
+});
+
+test("redirect loops and long chains stop at the shared hop limit", async () => {
+  for (const loop of [true, false]) {
+    let requests = 0;
+    const { PortScanner } = load(["shared.js", "scanner.js"], {
+      fetch: async () => {
+        requests++;
+        return new Response(null, { status: 302, headers: { location: loop && requests === 2 ? "/" : `/hop-${requests}` } });
+      },
+    });
+    const result = await PortScanner.probePort({ port: 8073, url: "http://localhost:8073" });
+    assert.equal(result.redirect, true);
+    assert.equal(requests, loop ? 2 : PortScanner.MAX_REDIRECTS + 1);
+  }
+});
+
+test("a failed redirect destination preserves the reachable root", async () => {
+  let requests = 0;
+  const { PortScanner } = load(["shared.js", "scanner.js"], {
+    fetch: async () => {
+      if (++requests > 1) throw new Error("Connection closed");
+      return new Response(null, { status: 302, headers: { location: "/login" } });
+    },
+  });
+  const result = await PortScanner.probePort({ port: 8073, url: "http://localhost:8073" });
+  assert.equal(result.alive, true);
+  assert.equal(result.redirect, true);
+  assert.equal(requests, 2);
+});
+
+test("one deadline covers the entire redirect chain and removes its header listener", async () => {
+  let requests = 0;
+  const listeners = new Set();
+  const { PortScanner } = load(["shared.js", "scanner.js"], {
+    chrome: { webRequest: { onHeadersReceived: {
+      addListener(listener) { listeners.add(listener); }, removeListener(listener) { listeners.delete(listener); },
+    } } },
+    fetch: async (url, { signal }) => {
+      requests++;
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, 650);
+        signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("aborted")); }, { once: true });
+      });
+      return new Response(null, { status: 302, headers: { location: `/hop-${requests}` } });
+    },
+  });
+  const start = Date.now();
+  const result = await PortScanner.probePort({ port: 8073, url: "http://localhost:8073" });
+  assert.equal(result.alive, true);
+  assert.equal(result.redirect, true);
+  assert.equal(requests, 2);
+  assert.ok(Date.now() - start < 2000);
+  assert.equal(listeners.size, 0);
+});
+
 test("offline results retain a safe launch URL", async () => {
   const { PortScanner } = load(["shared.js", "scanner.js"], { fetch: async () => { throw new Error("offline"); } });
   const result = await PortScanner.probePort({ port: 1234, custom: true });

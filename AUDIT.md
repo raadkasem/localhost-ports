@@ -28,15 +28,15 @@ after the original findings.
 
 - **01, 08:** Dynamic values use `textContent` and validated URLs, never HTML interpolation. Shared strict parsing rejects partial numbers, exponents, decimals, and out-of-range ports. Normalization migrates/deduplicates old storage and rejects nonlocal or non-HTTP(S) endpoints.
 - **02, 07, 09, 10:** One queued service-worker writer owns discovery and popup edits. Dismissals survive navigation and popup reloads. Storage events update open popups and normalized badge counts; redundant badge operations are coalesced.
-- **03, 04, 05, 12:** The shared scanner runs four port workers with at most two host requests each. One-second deadlines cover headers and body reading; title reads stop at 64 KiB, and all bodies/requests are canceled or aborted. Results stream progressively, stale scans are aborted, and popup renders are frame-batched with delegated handlers. All HTTP statuses and manual redirects establish reachability; HTTPS and remembered local origins are supported. During fallback probing, a plaintext HTTP error cannot mask a working HTTPS service on the same port.
+- **03, 04, 05, 12:** The shared scanner runs four port workers with at most two host requests each. One-second deadlines cover headers, bounded same-origin redirect chains, and body reading; title reads stop at 64 KiB, and all bodies/requests are canceled or aborted. Results stream progressively, stale scans are aborted, and popup renders are frame-batched with delegated handlers. All HTTP statuses and redirects establish reachability; HTTPS and remembered local origins are supported. During fallback probing, a plaintext HTTP error cannot mask a working HTTPS service on the same port.
 - **06, 11, 13, 14:** Saved ports are separate from active results. Following the user's online-only display request, offline and pending ports stay hidden without deleting saved configuration; refresh/reopening checks them again. This intentionally replaces the original plan to show removable offline rows. Controls bind before I/O; API failures have feedback and retry, and edit controls recover in `finally`. Discovery handles pending navigation, implicit HTTP(S) ports, existing local tabs, and IPv6 origins. Refresh, semantic keyboard links, labels, focus retention, persistent live feedback regions, stronger small-text contrast, reduced motion, and bounded scroll areas are implemented. Row animations no longer restart on every progressive update.
 - **15:** Removed the unnecessary `tabs` permission, limited host permissions to explicit local HTTP(S) hosts, centralized configuration, added dependency-free checks/tests, and documented actual scope, privacy, and browser limitations.
 
 ### Verification
 
 - `npm run check`: production JavaScript syntax checks.
-- `npm test`: 29 automated regressions for input/storage validation, endpoint restrictions, concurrent discoveries/edits, migration, persistent dismissal, API failure recovery, badge updates, HTTP/HTTPS selection, response/body deadlines, cancellation, and the eight-request concurrency ceiling. Also checks manifest permissions, icon dimensions, short-lived cache validation/expiry, and AirPlay exclusion without hiding genuine HTTP 403 apps.
-- `npm run test:browser` with Chrome for Testing 156.0.8078.4: loads the real unpacked extension in an isolated profile and exercises HTTP, HTTPS, IPv6, authenticated errors, redirects without following their destination, stalled bodies, hostile escaped titles, counts/layout at 400px, focus handling, reduced motion, strict input handling, hidden offline saves, rapid duplicate submissions, live discovery/badges, refresh, reopen persistence, and visibility as saved services start and stop. No uncaught popup errors or unhandled rejections were observed. The test-only HTTPS fixture uses a self-signed certificate bypass; production never does.
+- `npm test`: 36 automated regressions for input/storage validation, endpoint restrictions, concurrent discoveries/edits, migration, persistent dismissal, API failure recovery, badge updates, HTTP/HTTPS selection, response/body deadlines, cancellation, and the eight-request concurrency ceiling. Also checks manifest permissions, icon dimensions, short-lived cache validation/expiry, AirPlay exclusion without hiding genuine HTTP 403 apps, safe redirect resolution, loop/hop limits, listener cleanup, and failed-destination fallback.
+- `npm run test:browser` with Chrome for Testing 156.0.8078.4: loads the real unpacked extension in an isolated profile and exercises HTTP, HTTPS, IPv6, authenticated errors, same-origin redirect titles/chains, blocked cross-origin hops, omitted cookies, redirect loops, stalled bodies, hostile escaped titles, counts/layout at 400px, focus handling, reduced motion, strict input handling, hidden offline saves, rapid duplicate submissions, live discovery/badges, refresh, reopen persistence, and visibility as saved services start and stop. No uncaught popup errors or unhandled rejections were observed. The test-only HTTPS fixture uses a self-signed certificate bypass; production never does.
 - `git diff --check`: whitespace validation.
 
 ### Popup follow-up (1.2.1)
@@ -52,6 +52,19 @@ macOS Control Center's AirPlay Receiver can return an empty HTTP 403 on port
 5000. The scanner now excludes responses identified by an AirTunes/AirPlay
 server header, not arbitrary 403 responses or port 5000 itself. Tests cover both
 system-service exclusion and genuine development apps, including mixed hosts.
+
+### Redirect-title follow-up (1.2.2)
+
+Local roots redirecting to pages such as `/login` can now expose their HTML title.
+Chrome's `webRequest` permission supplies redirect headers hidden by opaque fetch
+responses. Temporary, nonblocking listeners accept only matching requests initiated
+by this extension on explicitly permitted local hosts and are removed after each
+probe. Every request still uses manual redirects and omitted credentials; each next
+URL is validated before fetching. At most three hops may retain the exact original
+scheme, hostname, and port, within one shared one-second deadline. Loops, credentials,
+and cross-origin destinations are refused. Intermediate bodies are canceled; failed
+destinations preserve the reachable root and its `Redirect` fallback. Only the original
+origin is retained as a launch URL; redirected paths/queries are not cached.
 
 ### Remaining platform limits (not unresolved implementation findings)
 

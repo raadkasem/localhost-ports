@@ -4,14 +4,13 @@
 
 Chrome extension that checks selected local HTTP(S) ports and opens reachable services with one click.
 
-**Current version: 1.2.1** · [Changelog](CHANGELOG.md)
+**Current version: 1.2.2** · [Changelog](CHANGELOG.md)
 
-## What's new in 1.2.1
+## What's new in 1.2.2
 
-- **Quieter reopening:** recent results appear immediately while services are rechecked in the background. The first open, or an expired cache, still needs a scan.
-- **Stable refresh:** existing service cards and keyboard focus remain in place while checks finish.
-- **No AirPlay false positives:** Apple's AirPlay/AirTunes responses are excluded, while real development apps on port 5000 and other HTTP 403 services remain supported.
-- **More regression coverage:** 29 automated tests plus isolated real-Chrome checks for cached reopening, refresh, and service detection.
+- **Titles after login redirects:** local apps that redirect `/` to pages such as `/login` can now show the destination's HTML title instead of only `Redirect`.
+- **Safe redirect handling:** allow at most three hops on the exact same origin, within the existing one-second deadline. External destinations, loops, and credential-bearing URLs remain blocked; launch links keep the original origin.
+- **More regression coverage:** 36 automated tests plus isolated real-Chrome checks for redirect titles, chains, blocked cross-origin hops, and omitted cookies.
 
 ## Features
 
@@ -20,6 +19,7 @@ Chrome extension that checks selected local HTTP(S) ports and opens reachable se
 - Discovers HTTP(S) origins on `localhost`, `127.0.0.1`, `0.0.0.0`, and IPv6 `[::1]`, including implicit ports 80/443
 - Detects local tabs on navigation, installation/startup, and popup refresh
 - Shows page titles as plain text and recognizes authentication errors, redirects, and other HTTP responses as reachable
+- Reads titles after up to three same-origin redirects, such as `/` → `/login`, without changing the service's launch URL
 - Shows only confirmed online services; saved offline ports stay hidden and are checked again on refresh or reopening
 - Restores results checked within the last minute while rechecking quietly; refresh keeps existing cards in place until updated
 - Excludes services identifying themselves as Apple AirPlay/AirTunes, without hiding real development apps on port 5000 or other HTTP 403 responses
@@ -53,7 +53,9 @@ When you visit a supported local HTTP(S) origin on an unknown port, the extensio
 
 After updating the files, click the extension's **Reload** button in `chrome://extensions`. Chrome may request approval for the added HTTPS/IPv6 host access.
 
-If you cloned the repo, run `git pull --ff-only` before reloading. The extension card should then show **1.2.1**. Existing custom ports are preserved; offline ones simply stay hidden until they respond. Version 1.2.1 adds no permissions. Reloading clears the short-lived result cache, so the first popup open scans normally; subsequent opens can restore recent results.
+If you cloned the repo, run `git pull --ff-only` before reloading. The extension card should then show **1.2.2**. Existing custom ports are preserved; offline ones simply stay hidden until they respond. Reloading clears the short-lived result cache, so the first popup open scans normally; subsequent opens can restore recent results.
+
+Version 1.2.2 adds `webRequest` to read local redirect response headers; Chrome may ask you to approve the permission when reloading. No external-host access is added.
 
 ## Scope and privacy
 
@@ -61,8 +63,8 @@ If you cloned the repo, run `git pull --ff-only` before reloading. The extension
 - “Active” means an HTTP response was received, not that the application is healthy. New ports without a confirmed response stay hidden. On reopening, results checked within the last minute can appear immediately while fresh checks run; a service that has stopped disappears when its check finishes. Refresh also keeps last-checked cards visible until updated. Slow servers, browser-blocked ports, denied host access, and untrusted HTTPS certificates can prevent detection. Trust development certificates in Chrome first; the extension never bypasses certificate validation.
 - macOS Control Center's AirPlay Receiver can occupy port 5000 and return an empty `403 Forbidden`. Responses with an `AirTunes` or `AirPlay` server identity are intentionally excluded. A genuine development server on port 5000 is still supported, and authentication errors from other servers remain visible.
 - Automatic host probing uses `127.0.0.1` and `localhost`. Visiting a service on `[::1]` or `0.0.0.0` remembers that origin for later checks. Custom hostnames, nonlocal addresses, WebSocket-only services, and other protocols are outside its scope.
-- Scans use unauthenticated, uncached `GET /` requests. They do not follow redirects or send credentials; title reads stop at 64 KiB and remaining bodies are canceled. Roots requiring cookies may show an authentication status instead of a title; titles beyond the first 64 KiB are not read.
-- Settings and discovered origins stay in `chrome.storage.local`; URL paths, queries, fragments, and page titles are not written there. A short-lived result snapshot, including displayed titles, uses in-memory `chrome.storage.session` and is cleared when Chrome restarts or the extension reloads. Snapshots older than one minute are ignored. There is no extension telemetry or external API. Only `storage` and explicit local host permissions are requested—not broad tab-metadata (`tabs`) access.
+- Scans start with unauthenticated, uncached `GET /` requests. Up to three redirects can be followed only when the scheme, hostname, and port are unchanged, within the same one-second deadline. Every hop is checked before requesting it; external destinations, host aliases, port/protocol changes, credential-bearing URLs, and redirect loops are not followed. Requests never send credentials. Title reads stop at 64 KiB and remaining bodies are canceled. Roots requiring cookies may show an authentication status instead of a title; titles absent from server HTML or beyond the first 64 KiB are not read.
+- Settings and discovered origins stay in `chrome.storage.local`; URL paths, queries, fragments, and page titles are not written there. A short-lived result snapshot, including displayed titles, uses in-memory `chrome.storage.session` and is cleared when Chrome restarts or the extension reloads. Snapshots older than one minute are ignored. Redirect paths are not persisted, and launch links retain the original origin. There is no extension telemetry or external API. Permissions are `storage`, `webRequest` (temporary, nonblocking observation of this extension's local scan response headers), and explicit local HTTP(S) hosts—not broad tab-metadata (`tabs`) or external-host access.
 
 ## Development and verification
 
@@ -79,7 +81,7 @@ Optional real-browser integration tests require an installed **Chrome for Testin
 CHROME_PATH="/path/to/chrome" npm run test:browser
 ```
 
-The runner uses a separate disposable profile and local HTTP/HTTPS/IPv6 fixtures, never your personal profile. That test browser ignores certificate errors to exercise its self-signed HTTPS fixture; production code does not bypass TLS validation. An optional `BROWSER_SCREENSHOT=/absolute/path/popup.png` captures the 400-pixel popup during the test. Browser tests cover real extension permissions, safe rendering, response handling, live discovery, persistence, validation, AirPlay exclusion, quiet cached reopening, stable refresh, and online-only visibility as servers start and stop.
+The runner uses a separate disposable profile and local HTTP/HTTPS/IPv6 fixtures, never your personal profile. That test browser ignores certificate errors to exercise its self-signed HTTPS fixture; production code does not bypass TLS validation. An optional `BROWSER_SCREENSHOT=/absolute/path/popup.png` captures the 400-pixel popup during the test. Browser tests cover real extension permissions, safe rendering, response handling, same-origin redirect titles/chains, blocked cross-origin hops, redirect loops, omitted cookies, live discovery, persistence, validation, AirPlay exclusion, quiet cached reopening, stable refresh, and online-only visibility as servers start and stop.
 
 See [AUDIT.md](AUDIT.md) for the original findings, fixes, and verification details.
 

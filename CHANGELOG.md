@@ -2,6 +2,23 @@
 
 Notable changes to Localhost Ports Dashboard are documented here.
 
+## 1.2.2 - 2026-10-23
+
+### Fixed
+
+- Local apps whose root redirects to a login page now show the destination's HTML title instead of only `Redirect`, when it is reachable without credentials on the same origin.
+- Validate each redirect before fetching it: allow at most three hops on the exact same scheme, host, and port. Block other origins, credential-bearing URLs, and loops; retain the original launch URL and the responding-root fallback if a destination fails.
+- Keep the one-second deadline across the entire redirect chain, cancel intermediate bodies, and remove temporary response-header listeners after scanning.
+
+### Added
+
+- Seven redirect regression tests (36 automated tests total), plus real-Chrome checks for login titles, relative redirect chains, blocked cross-origin hops, loops, and omitted cookies.
+
+### Upgrade notes
+
+- Adds `webRequest` permission to read local redirect headers that Chrome hides from `fetch`. Existing local host permissions remain unchanged; no external-host or blocking-request access is added.
+- Reload the extension, confirm version **1.2.2**, and approve the permission if prompted. A refreshed scan replaces any cached `Redirect` label with the available title. Saved ports are preserved.
+
 ## 1.2.1 - 2026-10-21
 
 ### Fixed
